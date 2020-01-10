@@ -1,7 +1,7 @@
 # ConvNeuralODE
 
-### Pulse 1/2D
+### toy
 Solving the 1/2D scalar transport equations
 
-### Flat Plate
-Exploring the idea of integrating the neural ODE over space vs. time
+### isotropic
+ConvNODE with isotropic turbulence
