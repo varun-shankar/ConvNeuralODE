@@ -5,9 +5,7 @@ import Flux.Optimise: update!
 ################################################################################
 ### Data ###
 
-@everywhere tsize = 100
-
-include("/home/vshanka2/research/ml-cfd/ConvNODE/data/read_data.jl")
+include(data_dir*"/read_data.jl")
 
 dataOb = DataLoader(train_size, test_size, mbs, tsize)
 
@@ -23,17 +21,17 @@ channels = dataOb.channels
 ################################################################################
 ### Architecture ###
 
-@everywhere include("architecture.jl")
+@eval @everywhere include($arch_dir*"/architecture.jl")
 
 ################################################################################
 ### Serial or parallel ###
 
 if length(gpu_ids)<2
   println("### Serial ###")
-  include("serial.jl")
+  include(base_dir*"/serial.jl")
 else
   println("### Parallel ###")
-  include("parallel.jl")
+  include(base_dir*"/parallel.jl")
 end
 @show(gpu_ids)
 println("")
@@ -42,7 +40,7 @@ println("")
 ### Training ###
 
 # Train loop
-function train_fn(ms, dataOb, loss, opt, epochs; cb = () -> ())
+function train_fn(ms, dataOb, loss, opt, epochs; testit=1, cb=()->())
   println("")
   for i = 1:epochs
     println("[Epoch: ", i,"]")
@@ -54,13 +52,14 @@ function train_fn(ms, dataOb, loss, opt, epochs; cb = () -> ())
       ps, gs = train_b(workers(), dataOb, j, ms, loss)
       update!(opt, ps, gs)
 
-      if (j-1)%1==0
+      if (j-1)%testit==0
         cb()
       end
     end
   end
   println("")
   println("Done")
+  println("")
   cb()
 end
 
@@ -71,15 +70,17 @@ cb = function ()
  println("   Norm: ", lossN)
  weights = cpu.(params(ms))
  bson("params-"*save_to*".bson", params=weights)
- if lossM < best_loss
-   global best_loss = lossM
+ if lossN < best_loss
+   rm("params-best-"*string(round(best_loss,digits=4))*".bson")
+   global best_loss = lossN
    println("   Best test")
-   bson("params-best-"*string(nb+1)*".bson", params=weights)
+   bson("params-best-"*string(round(best_loss,digits=4))*".bson", params=weights)
    upred = cpu(denormalize(test_consts,up))
    write("upred", upred[:])
  end
  flush(stderr)
  flush(stdout)
+ return up, lossM, lossN
 end
 
 ################################################################################

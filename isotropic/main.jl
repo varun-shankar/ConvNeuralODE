@@ -16,14 +16,20 @@ mbs = 4
 epochs = 50
 write_pred = true
 
+# Directories
+base_dir = "../base"
+data_dir = "../data"
+arch_dir = "."
+
 # Print description
 println("### Description ###")
-println("z=6, ANODE (4L/64C/+2C), pretrained-joint")
+println("z=6, ANODE (5L/64C/+2C), joint")
 println("")
 
 ################################################################################
 
-include("common.jl")
+@everywhere tsize = 100
+include(base_dir*"/common.jl")
 
 ################################################################################
 
@@ -35,7 +41,7 @@ end
 ################################################################################
 
 ## Optimiser ##
-opt = Flux.Optimiser(ADAM(.0002), WeightDecay(0))
+opt = Flux.Optimiser(ADAM(.001), WeightDecay(0))
 
 ## Parameters ##
 ps = gen_ps(ms)
@@ -45,15 +51,9 @@ no_tot_ps = length([Iterators.flatten(cpu.(ps))...]) - no_node_ps
 ## Initial loss ##
 test_consts, test_batch = get_test(dataOb)
 up, lossM, lossN = initialize_gpus(ms, test_batch)
-global best_loss = lossM
-
-## Check no. of best params ##
-if length(filter(x->occursin("params-best",x), readdir()))>0
-  global nb = parse(Int,filter(x->occursin("params-best",x),
-                    readdir())[end][13])
-else
-  global nb = 0
-end
+global best_loss = lossN
+weights = cpu.(params(ms))
+bson("params-best-"*string(round(best_loss,digits=4))*".bson", params=weights)
 
 ################################################################################
 
@@ -86,14 +86,14 @@ flush(stdout)
 
 # Train
 if train
-  @time train_fn(ms, dataOb, lossMSE, opt, epochs, cb = cb)
+  @time up, lossM, lossN = train_fn(ms, dataOb, lossMSE, opt, epochs,
+                                    testit = 2, cb = cb)
 end
 
 # Write out
 if write_pred
-  up, _, _ = get_loss(ms, test_batch)
-  utrue = cpu(denormalize(test_consts,test_batch[2]))
-  write("utrue", utrue[:])
+  # utrue = cpu(denormalize(test_consts,test_batch[2]))
+  # write("utrue", utrue[:])
   upred = cpu(denormalize(test_consts,up))
   write("upred", upred[:])
 end

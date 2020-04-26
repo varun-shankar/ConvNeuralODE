@@ -17,10 +17,10 @@ mutable struct DataLoader
   channels::Int
   stepsτ::Int
 
-  function DataLoader(train_size_, test_size_, minibatch_size_, tsize_, shuff_=true)
+  function DataLoader(train_size_, test_size_, minibatch_size_, tsize_,
+                      dir_=data_dir, shuff_=true)
 
-    dir = "/home/vshanka2/research/ml-cfd/ConvNODE/data/"
-
+    dir = dir_
     train_size = train_size_
     test_size = test_size_
     mbs = minibatch_size_
@@ -29,7 +29,7 @@ mutable struct DataLoader
     channels = 3
     stepsτ = 100
 
-    temp = readdlm(dir*"global",comments=true,comment_char='/')
+    temp = readdlm(dir*"/global",comments=true,comment_char='/')
     globDict = Dict(temp[i,1]=>temp[i,2] for i in 1:size(temp,1))
 
     data_idxs = 0:globDict["dtStat"]*stepsτ:globDict["tsEnd"]
@@ -54,7 +54,7 @@ function readbin(filename, T)
 end
 
 # Get training batch
-function get_train(DL::DataLoader, idx, norm=true, use_gpu=false)
+function get_train(DL::DataLoader, idx, norm=true)
   u_train_batch = Float32.(zeros(
                   DL.globDict["nx"],DL.globDict["ny"],DL.globDict["nz"],
                   DL.channels,DL.tsize,DL.mbs))
@@ -62,19 +62,14 @@ function get_train(DL::DataLoader, idx, norm=true, use_gpu=false)
     ts = range(DL.train_idxs[idx][b],length=DL.tsize,step=DL.globDict["dtStat"]*DL.stepsτ÷DL.tsize)
     for t = 1:length(ts)
       for v = 1:3
-        snap = readbin(DL.dir*"data_single/u"*string(v)*"."*string(ts[t]), Float32)
+        snap = readbin(DL.dir*"/data_single/u"*string(v)*"."*string(ts[t]), Float32)
         snap = reshape(snap,2+DL.globDict["nx"],DL.globDict["ny"],DL.globDict["nz"])
         snap = snap[1:end-2,:,:]
         u_train_batch[:,:,:,v,t,b] = snap
       end
     end
   end
-
   u0_train_batch = u_train_batch[:,:,:,:,1,:]
-  if use_gpu
-    u0_train_batch = cu(u0_train_batch)
-    u_train_batch = cu(u_train_batch)
-  end
   if norm
     return normalize((u0_train_batch, u_train_batch))
   else
@@ -83,7 +78,7 @@ function get_train(DL::DataLoader, idx, norm=true, use_gpu=false)
 end
 
 # Get the test batch
-function get_test(DL::DataLoader, norm=true, use_gpu=false)
+function get_test(DL::DataLoader, norm=true)
   u_test = Float32.(zeros(
            DL.globDict["nx"],DL.globDict["ny"],DL.globDict["nz"],
            DL.channels,DL.tsize,DL.test_size))
@@ -91,19 +86,14 @@ function get_test(DL::DataLoader, norm=true, use_gpu=false)
     ts = range(DL.test_idxs[b],length=DL.tsize,step=DL.globDict["dtStat"]*DL.stepsτ÷DL.tsize)
     for t = 1:length(ts)
       for v = 1:3
-        snap = readbin(DL.dir*"data_single/u"*string(v)*"."*string(ts[t]), Float32)
+        snap = readbin(DL.dir*"/data_single/u"*string(v)*"."*string(ts[t]), Float32)
         snap = reshape(snap,2+DL.globDict["nx"],DL.globDict["ny"],DL.globDict["nz"])
         snap = snap[1:end-2,:,:]
         u_test[:,:,:,v,t,b] = snap
       end
     end
   end
-
   u0_test = u_test[:,:,:,:,1,:]
-  if use_gpu
-    u0_test = cu(u0_test)
-    u_test = cu(u_test)
-  end
   if norm
     return normalize((u0_test, u_test))
   else
@@ -111,13 +101,13 @@ function get_test(DL::DataLoader, norm=true, use_gpu=false)
   end
 end
 
-function reshuffle!(DL::DataLoader)
+function reshuffle!(DL::DataLoader, test=false)
   DL.train_idxs = DL.data_idxs[1:DL.train_size]
-  # DL.test_idxs = reverse(DL.data_idxs)[1:DL.test_size]
-
   shuffle!(DL.train_idxs)
-  # shuffle!(DL.test_idxs)
-
+  if test
+    DL.test_idxs = reverse(DL.data_idxs)[1:DL.test_size]
+    shuffle!(DL.test_idxs)
+  end
   #batching
   DL.train_idxs =
   [DL.train_idxs[(i-1)*DL.mbs+1:i*DL.mbs] for i in 1:Int(DL.train_size/DL.mbs)]

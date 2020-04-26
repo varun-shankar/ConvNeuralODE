@@ -13,11 +13,11 @@ b2t(x) = reshape(x,size(x,1),size(x,2),size(x,3),size(x,4),tsize,size(x,5)÷tsiz
 Dz, Dh, Da = 4, 50, 2
 
 # Encoder
-encode = Chain(Conv((4,4,4), 3=>Dh, pad=1, stride=2, swish),
+encode = Chain(Conv((4,4,4), 3=>Dh, pad=1, stride=2, relu),
                Conv((3,3,3), Dh=>Dz, pad=1, stride=1))
 
 # Decoder
-decode = Chain(ConvTranspose((3,3,3), Dz=>Dh, pad=1, stride=1, swish),
+decode = Chain(ConvTranspose((3,3,3), Dz=>Dh, pad=1, stride=1, relu),
                ConvTranspose((4,4,4), Dh=>3, pad=1, stride=2))
 
 function decode_serial(x, decode)
@@ -29,9 +29,10 @@ function decode_serial(x, decode)
 end
 
 ## dldt
-dldt = Chain(Conv((3,3,3), 6=>32, pad=1, swish),
-             Conv((3,3,3), 32=>64, pad=1, swish),
-             Conv((3,3,3), 64=>32, pad=1, swish),
+dldt = Chain(Conv((3,3,3), 6=>32, pad=1, relu),
+             Conv((3,3,3), 32=>64, pad=1, relu),
+             Conv((3,3,3), 64=>64, pad=1, relu),
+             Conv((3,3,3), 64=>32, pad=1, relu),
              Conv((3,3,3), 32=>6, pad=1))
 
 # Augment
