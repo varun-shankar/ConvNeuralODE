@@ -101,6 +101,9 @@ if use_gpu
  dudt_true = gpu(dudt_true)
 end
 
+n_ode = NeuralODE(dudt,tspan,Tsit5(),saveat=t,reltol=1e-7,abstol=1e-9)
+n_ode_true = NeuralODE(dudt_true,tspan,Tsit5(),saveat=t,reltol=1e-7,abstol=1e-9)
+
 n_ode(x) = permutedims(neural_ode(dudt,x,tspan,
                        Tsit5(),saveat=t,reltol=1e-7,abstol=1e-9),[1,2,3,5,4])
 
