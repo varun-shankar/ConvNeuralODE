@@ -1,15 +1,17 @@
 @everywhere using Statistics
 using BSON
+using DelimitedFiles
 using Flux
 import Flux.Optimise: update!
 ################################################################################
 ### Data ###
 
-include(data_dir*"/read_data.jl")
+include(base_dir*"/read_data.jl")
 
-dataOb = DataLoader(train_size, test_size, mbs, tsize)
+dataOb = DataLoader(train_size, test_size, mbs, tsize, data_dir)
 
 dt = dataOb.globDict["dt"]*dataOb.globDict["dtStat"]*(dataOb.stepsτ÷dataOb.tsize)
+@eval @everywhere tsize = $tsize
 @eval @everywhere tspan = (0f0, Float32($dt*(tsize-1)))
 @everywhere t = range(tspan[1],tspan[2],length=tsize)
 
@@ -26,20 +28,30 @@ channels = dataOb.channels
 ################################################################################
 ### Serial or parallel ###
 
-if length(gpu_ids)<2
+if gpu_num<2
   println("### Serial ###")
   include(base_dir*"/serial.jl")
 else
   println("### Parallel ###")
   include(base_dir*"/parallel.jl")
 end
-@show(gpu_ids)
+print("gpu_ids: ")
+display(gpu_ids)
 println("")
+flush(stderr)
+flush(stdout)
 
 ################################################################################
 ### Training ###
 
 # Train loop
+loss_h = []
+loss_save = []
+global λ = .001f0 # initial value
+λ_up_hist_length = 5
+λ_up_tol = 0.001
+λ_up_factor = 1.1
+min_ep = 2
 function train_fn(ms, dataOb, loss, opt, epochs; testit=1, cb=()->())
   println("")
   for i = 1:epochs
@@ -48,13 +60,24 @@ function train_fn(ms, dataOb, loss, opt, epochs; testit=1, cb=()->())
       reshuffle!(dataOb)
     end
     for j = 1:Int(dataOb.train_size/dataOb.mbs)
+      # λ update
+      if i > min_ep
+        λ_crit = mean(diff(loss_h[end-λ_up_hist_length+1:end]))
+        println(λ_crit)
+        if λ_crit >= λ_up_tol#(i-1)%2==0 && j==1#
+          global λ *= λ_up_factor
+          println("λ: ", round(λ,digits=4))
+        end
+      end
 
-      ps, gs = train_b(workers(), dataOb, j, ms, loss)
+      l, ps, gs = train_b(workers(), dataOb, j, ms, loss, λ)
       update!(opt, ps, gs)
+      push!(loss_h, l)
 
       if (j-1)%testit==0
         cb()
       end
+
     end
   end
   println("")
@@ -70,6 +93,8 @@ cb = function ()
  println("   Norm: ", lossN)
  weights = cpu.(params(ms))
  bson("params-"*save_to*".bson", params=weights)
+ push!(loss_save, [λ, loss_h[end], lossM, lossN])
+ writedlm("loss-"*save_to_loss, loss_save)
  if lossN < best_loss
    rm("params-best-"*string(round(best_loss,digits=4))*".bson")
    global best_loss = lossN

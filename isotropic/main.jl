@@ -1,37 +1,39 @@
-using Distributed
-gpu_ids = [0,1,2,3]
-gpu_num = length(gpu_ids)
-if gpu_num > 1 && nprocs() == 1
-  addprocs(gpu_num)
-  def_worker = 3
-end
+gpu_ids = [1,2]
+def_worker = 3
 ################################################################################
 ### Setup ###
+
 train = true
-load_from = "1"
-save_to = "1"
+load_from = "3"
+save_to = "3"
+save_to_loss = "10"
 train_size = 40
 test_size = 1
 mbs = 4
-epochs = 50
+epochs = 2
 write_pred = true
+tsize = 100
 
 # Directories
 base_dir = "../base"
-data_dir = "../data"
+data_dir = "/data/vshankar/ConvNODE/3D_LANL"
 arch_dir = "."
 
 # Print description
 println("### Description ###")
-println("z=6, ANODE (5L/64C/+2C), joint")
+println("z=6, ANODE (4L/64C/+2C), pretrained-joint")
 println("")
+flush(stdout)
 
 ################################################################################
+### Initialize ###
 
-@everywhere tsize = 100
+include(base_dir*"/distributed.jl")
+gpu_num, pds = distributed_setup(gpu_ids)
 include(base_dir*"/common.jl")
 
 ################################################################################
+### Load weights ###
 
 if !isempty(load_from)
   weights = BSON.load("params-"*load_from*".bson")[:params]
@@ -41,7 +43,7 @@ end
 ################################################################################
 
 ## Optimiser ##
-opt = Flux.Optimiser(ADAM(.001), WeightDecay(0))
+opt = Flux.Optimiser(ADAM(.0001), WeightDecay(0))
 
 ## Parameters ##
 ps = gen_ps(ms)
@@ -67,19 +69,20 @@ println("### Setup ###")
 @show(mbs)
 @show(epochs)
 @show(write_pred)
+@show(tsize)
 println("")
 println("### Model ###")
 @show(encode)
 @show(dldt)
 @show(decode)
-@show(opt)
+# @show(opt)
 println("")
 println("# of NODE params: ", no_node_ps)
 println("# of trainable params: ", no_tot_ps)
 println("")
 
 # Print initial loss
-println("MSE: ", best_loss)
+println("MSE: ", lossM)
 println("   Norm: ", lossN)
 flush(stderr)
 flush(stdout)
@@ -92,8 +95,8 @@ end
 
 # Write out
 if write_pred
-  # utrue = cpu(denormalize(test_consts,test_batch[2]))
-  # write("utrue", utrue[:])
+  utrue = cpu(denormalize(test_consts,test_batch[2]))
+  write("utrue", utrue[:])
   upred = cpu(denormalize(test_consts,up))
   write("upred", upred[:])
 end

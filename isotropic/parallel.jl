@@ -1,13 +1,14 @@
 using Flux
 ################################################################################
 ### Initialize the GPUs ###
-asyncmap((zip(workers(), gpu_ids))) do (p, d)
+asyncmap(pds) do (p, d)
    remotecall_wait(p) do
-       @info "Worker $p uses GPU:$d"
+       h = gethostname()
        @eval using CuArrays
        @eval using CUDAnative
        CuArrays.allowscalar(false)
        CUDAnative.device!(d)
+       println("Worker $p uses GPU:$d on $h")
    end
 end
 ################################################################################
@@ -48,32 +49,34 @@ end
 ### Training ###
 
 # Get grads
-@everywhere function return_gs(ms, data, loss)
+@everywhere function return_gs(ms, data, loss, λ)
   data = gpu(data)
   ms = gpu(ms)
   model = gen_mod(ms)
   ps = gen_ps(ms)
-  l(u0,u) = loss(model(u0),u)
+  l(u0,u) = loss(model(u0),u)*(1+λ)
+  lval = l(data...)/(1+λ)
   gs = gradient(ps) do
     l(data...)
   end
   flush(stderr)
   out = Dict(cpu(p)=>cpu(gs[p]) for p in ps)
-  return out
+  return lval, out
 end
 
 # Parallel backprop
-function train_b(w, DL, batch_idx, ms, loss)
+function train_b(w, DL, batch_idx, ms, loss, λ)
   consts, train_batch = get_train(DL, batch_idx)
   ps = gen_ps(ms)
   grads = Vector{Any}(undef,gpu_num)
+  ls = Vector{Any}(undef,gpu_num)
   data =
     [(train_batch[1][:,:,:,:,(i-1)*mbs÷gpu_num+1:i*mbs÷gpu_num],
        train_batch[2][:,:,:,:,:,(i-1)*mbs÷gpu_num+1:i*mbs÷gpu_num])
        for i in 1:gpu_num]
   asyncmap(w) do p
-    grads[p-1] = remotecall_fetch(return_gs, p, ms, data[p-1], loss)
+    ls[p-1], grads[p-1] = remotecall_fetch(return_gs, p, ms, data[p-1], loss, λ)
   end
   gs = merge((x...)->(any(x.==nothing)) ? nothing : +(x...)./gpu_num, grads...)
-  return ps, gs
+  return mean(ls), ps, gs
 end

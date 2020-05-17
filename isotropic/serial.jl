@@ -44,7 +44,7 @@ end
 ### Training ###
 
 # Batch backprop
-function train_b(w, DL, batch_idx, ms, loss)
+function train_b(w, DL, batch_idx, ms, loss, λ)
   consts, data = get_train(DL, batch_idx)
   ps = gen_ps(ms)
   if gpu_num==1
@@ -53,10 +53,11 @@ function train_b(w, DL, batch_idx, ms, loss)
   end
   model = gen_mod(ms)
   pss = gen_ps(ms)
-  l(u0,u) = loss(model(u0),u)
+  l(u0,u) = loss(model(u0),u)*(1+λ)
+  lval = l(data...)/(1+λ)
   gs = gradient(pss) do
     l(data...)
   end
   gs = Dict(cpu(p)=>cpu(gs[p]) for p in pss)
-  return ps, gs
+  return lval, ps, gs
 end

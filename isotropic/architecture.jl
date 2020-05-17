@@ -3,6 +3,7 @@ using Flux
 using Zygote
 using DiffEqFlux
 using DiffEqSensitivity
+using BSON
 ################################################################################
 
 # Reshaping
@@ -13,11 +14,11 @@ b2t(x) = reshape(x,size(x,1),size(x,2),size(x,3),size(x,4),tsize,size(x,5)÷tsiz
 Dz, Dh, Da = 4, 50, 2
 
 # Encoder
-encode = Chain(Conv((4,4,4), 3=>Dh, pad=1, stride=2, relu),
+encode = Chain(Conv((4,4,4), 3=>Dh, pad=1, stride=2, swish),
                Conv((3,3,3), Dh=>Dz, pad=1, stride=1))
 
 # Decoder
-decode = Chain(ConvTranspose((3,3,3), Dz=>Dh, pad=1, stride=1, relu),
+decode = Chain(ConvTranspose((3,3,3), Dz=>Dh, pad=1, stride=1, swish),
                ConvTranspose((4,4,4), Dh=>3, pad=1, stride=2))
 
 function decode_serial(x, decode)
@@ -29,11 +30,10 @@ function decode_serial(x, decode)
 end
 
 ## dldt
-dldt = Chain(Conv((3,3,3), 6=>32, pad=1, relu),
-             Conv((3,3,3), 32=>64, pad=1, relu),
-             Conv((3,3,3), 64=>64, pad=1, relu),
-             Conv((3,3,3), 64=>32, pad=1, relu),
-             Conv((3,3,3), 32=>6, pad=1))
+dldt = Chain(Conv((3,3,3), Dz+Da=>32, pad=1, swish),
+             Conv((3,3,3), 32=>64, pad=1, swish),
+             Conv((3,3,3), 64=>32, pad=1, swish),
+             Conv((3,3,3), 32=>Dz+Da, pad=1))
 
 # Augment
 add_p(x) = begin
@@ -42,8 +42,8 @@ add_p(x) = begin
            end
 rm_p(x) = x[:,:,:,1:Dz,:,:]
 
-n_ode = NeuralODE(dldt,tspan,#sensealg=InterpolatingAdjoint(),
-                 Tsit5(),saveat=t,reltol=1e-7,abstol=1e-9)
+n_ode = NeuralODE(dldt,tspan,sensealg=BacksolveAdjoint(checkpointing=true),
+                 Tsit5(),saveat=t,reltol=1e-5,abstol=1e-7)
 
 # Final model
 ms = [encode,n_ode,decode]
@@ -54,6 +54,7 @@ gen_mod(ms) = Chain(ms[1],
                     x -> (isa(x,Array)) ? cpu(x) : gpu(x),
                     x -> permutedims(x,[1,2,3,4,6,5]),
                     rm_p,
-                    x -> decode_serial(x, ms[3])) #t2b, decode, b2t
+                    t2b, ms[3], b2t)
+                    # x -> decode_serial(x, ms[3]))
 # Generate params for training
 gen_ps(ms) = params(ms)
