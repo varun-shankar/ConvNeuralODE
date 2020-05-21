@@ -4,6 +4,7 @@ using Zygote
 using DiffEqFlux
 using DiffEqSensitivity
 using BSON
+include(base_dir*"gradient.jl")
 ################################################################################
 
 # Reshaping
@@ -35,6 +36,9 @@ dldt = Chain(Conv((3,3,3), Dz+Da=>32, pad=1, swish),
              Conv((3,3,3), 64=>32, pad=1, swish),
              Conv((3,3,3), 32=>Dz+Da, pad=1))
 
+# weights = BSON.load("params-sw-resf.bson")[:params]
+# Flux.loadparams!([encode,dldt,decode], weights)
+
 # Augment
 add_p(x) = begin
             a = zeros(size(x,1),size(x,2),size(x,3),Da,size(x,5))
@@ -42,19 +46,30 @@ add_p(x) = begin
            end
 rm_p(x) = x[:,:,:,1:Dz,:,:]
 
-n_ode = NeuralODE(dldt,tspan,sensealg=BacksolveAdjoint(checkpointing=true),
-                 Tsit5(),saveat=t,reltol=1e-5,abstol=1e-7)
+# include("NODE.jl")
+# node = NODE(dldt,tspan,sensealg=InterpolatingAdjoint(autojacvec=ZygoteVJP()),#BacksolveAdjoint(checkpointing=true),
+#                  Tsit5(),saveat=t,reltol=1e-4,abstol=1e-6)
+
+function n_ode(x, dldt)
+  out = Zygote.Buffer(x, size(x)...,tsize)
+  out[:,:,:,:,:,1] = x
+  for i = 2:tsize
+    out[:,:,:,:,:,i] = out[:,:,:,:,:,i-1].+dldt(out[:,:,:,:,:,i-1]).*(t[2]-t[1])
+  end
+  return copy(out)
+end
 
 # Final model
-ms = [encode,n_ode,decode]
+ms = [encode,dldt,decode]
 # Generate the full model
 gen_mod(ms) = Chain(ms[1],
                     add_p,
-                    ms[2],
+                    x -> n_ode(x, ms[2]),
+                    # ms[2],
                     x -> (isa(x,Array)) ? cpu(x) : gpu(x),
                     x -> permutedims(x,[1,2,3,4,6,5]),
                     rm_p,
-                    t2b, ms[3], b2t)
+                    t2b, ms[3], curl3D, b2t)
                     # x -> decode_serial(x, ms[3]))
 # Generate params for training
 gen_ps(ms) = params(ms)

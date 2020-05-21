@@ -48,10 +48,10 @@ flush(stdout)
 loss_h = []
 loss_save = []
 global λ = .001f0 # initial value
-λ_up_hist_length = 5
+λ_up_hist_length = 10
 λ_up_tol = 0.001
-λ_up_factor = 1.1
-min_ep = 2
+λ_up_factor = 1.0
+min_ep = 20
 function train_fn(ms, dataOb, loss, opt, epochs; testit=1, cb=()->())
   println("")
   for i = 1:epochs
@@ -69,6 +69,9 @@ function train_fn(ms, dataOb, loss, opt, epochs; testit=1, cb=()->())
           println("λ: ", round(λ,digits=4))
         end
       end
+
+      # Dynamic LR
+      if i == 201; opt.eta /= 2;elseif i == 301; opt.eta = .0001;end
 
       l, ps, gs = train_b(workers(), dataOb, j, ms, loss, λ)
       update!(opt, ps, gs)
@@ -93,7 +96,10 @@ cb = function ()
  println("   Norm: ", lossN)
  weights = cpu.(params(ms))
  bson("params-"*save_to*".bson", params=weights)
- push!(loss_save, [λ, loss_h[end], lossM, lossN])
+ div = remotecall_fetch(def_worker) do
+   mean(div3D(t2b(gpu(denormalize(test_consts,up))))[2:end-1,2:end-1,2:end-1,:,:])
+ end
+ push!(loss_save, Float32.([λ, loss_h[end], lossM, lossN, div]))
  writedlm("loss-"*save_to_loss, loss_save)
  if lossN < best_loss
    rm("params-best-"*string(round(best_loss,digits=4))*".bson")
@@ -120,6 +126,9 @@ lossMSE(up,u) = sum(sum(abs2,up.-u, dims=[1,2,3,5,6])./
 lossNorm(up,u) = mean(reshape(
                  sum(mean(abs2,up.-u, dims=[1,2,3,5]),dims=4),
                  size(u,6))./(2 .*batch_ke(u)))
+
+lossDiv(up,u) = lossMSE(up,u) +
+                50 .*sum(abs,div3D(t2b(up)))./prod(size(u)[[1,2,3,5,6]])
 
 # Helpers
 function snap_ke(u)

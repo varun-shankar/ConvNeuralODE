@@ -1,27 +1,26 @@
 using DifferentialEquations
 using Flux
-using Flux: @epochs
 using DiffEqFlux
-using NPZ
-using BSON: @save
-using BSON: @load
+using BSON
 using Statistics
 ################################################################################
 ### Setup ###
 
-use_gpu = false
+use_gpu = true
 plotting = false
 train = true
-load_weights = false
-load_from = "pulse2D-1"
-save_to = "pulse2D-1"
-epochs = 2000
+load_weights = true
+load_from = "1"
+save_to = "1"
+epochs = 200
 println("Pulse 2D")
 
 ################################################################################
 if use_gpu
   using CuArrays
+  using CUDAnative
   CuArrays.allowscalar(false)
+  CUDAnative.device!(1)
 end
 if plotting
   using Plots
@@ -80,9 +79,8 @@ data = Iterators.repeated((),1)
 ### Define architecture ###
 
 # Model
-dudt = Chain(Conv((5,5), 1=>4, pad=2), swish),
-             Conv((3,3), 4=>4, pad=1, swish),
-             Conv((1,1), 4=>1, pad=0))
+dudt = Chain(Conv((5,5), 1=>50, pad=2, swish),
+             Conv((1,1), 50=>1, pad=0))
 
 # True FD
 dudt_true = Chain(Conv((3,3), 1=>1, pad=1))
@@ -93,7 +91,7 @@ wt = reshape(wt,3,3,1,1)
 bt = Float32.([0])
 weights_true = [wt, bt]
 Flux.loadparams!(dudt_true,weights_true)
-dudt_true = Flux.mapleaves(Flux.data, dudt_true)
+# dudt_true = Flux.mapleaves(Flux.data, dudt_true)
 
 
 if use_gpu
@@ -104,18 +102,16 @@ end
 n_ode = NeuralODE(dudt,tspan,Tsit5(),saveat=t,reltol=1e-7,abstol=1e-9)
 n_ode_true = NeuralODE(dudt_true,tspan,Tsit5(),saveat=t,reltol=1e-7,abstol=1e-9)
 
-n_ode(x) = permutedims(neural_ode(dudt,x,tspan,
-                       Tsit5(),saveat=t,reltol=1e-7,abstol=1e-9),[1,2,3,5,4])
-
-n_ode_true(x) = permutedims(neural_ode(dudt_true,x,tspan,
-                       Tsit5(),saveat=t,reltol=1e-7,abstol=1e-9),[1,2,3,5,4])
-
-model = Chain(x -> n_ode(x))
-model_true = Chain(x -> n_ode_true(x))
+model = Chain(n_ode,
+              x -> (isa(x,Array)) ? cpu(x) : gpu(x),
+              x -> permutedims(x,[1,2,3,5,4]))
+model_true = Chain(n_ode_true,
+                   x -> (isa(x,Array)) ? cpu(x) : gpu(x),
+                   x -> permutedims(x,[1,2,3,5,4]))
 
 if load_weights
-  @load "params-"*load_from*".bson" weights
-  Flux.loadparams!(dudt,weights)
+  weights = BSON.load("params-"*load_from*".bson")[:params]
+  Flux.loadparams!(n_ode,weights)
 end
 
 ################################################################################
@@ -123,14 +119,14 @@ end
 
 loss() = mean(abs,model(phi0) .- phi_anal)
 loss_true() = mean(abs,model_true(phi0) .- phi_anal)
-opt = ADAM(0.001)
+opt = ADAM(0.0001)
 
 
 cb = function ()
   @show(loss())
   flush(stdout)
-  weights = Tracker.data.(Flux.params(cpu(dudt)))
-  @save "params-"*save_to*".bson" weights
+  weights = cpu.(params(n_ode))
+  bson("params-"*save_to*".bson", params=weights)
 end
 
 @show(use_gpu)
@@ -138,11 +134,11 @@ end
 @show(opt)
 @show(epochs)
 @show(save_to)
-ps = Flux.params(dudt)
+ps = Flux.params(n_ode)
 throttlemin = 0
 cb()
 if train
-  @time @epochs epochs Flux.train!(loss, ps, data, opt, cb = cb)
+  @time Flux.@epochs epochs Flux.train!(loss, ps, data, opt, cb = cb)
 end
 
 ################################################################################

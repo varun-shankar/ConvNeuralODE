@@ -4,13 +4,13 @@ def_worker = 3
 ### Setup ###
 
 train = true
-load_from = "3"
-save_to = "3"
-save_to_loss = "10"
-train_size = 40
+load_from = "sw-curl-resf"
+save_to = "sw-curl2-resf"
+save_to_loss = "sw-curl2-resf"
+train_size = 4
 test_size = 1
-mbs = 4
-epochs = 2
+mbs = 2
+epochs = 500
 write_pred = true
 tsize = 100
 
@@ -21,7 +21,7 @@ arch_dir = "."
 
 # Print description
 println("### Description ###")
-println("z=6, ANODE (4L/64C/+2C), pretrained-joint")
+println("z=6, ANODE (4L/64C/+2C), joint, Res")
 println("")
 flush(stdout)
 
@@ -43,12 +43,12 @@ end
 ################################################################################
 
 ## Optimiser ##
-opt = Flux.Optimiser(ADAM(.0001), WeightDecay(0))
+opt = ADAM(.0005)
 
 ## Parameters ##
 ps = gen_ps(ms)
 no_node_ps = length([Iterators.flatten(cpu.(params(dldt)))...])
-no_tot_ps = length([Iterators.flatten(cpu.(ps))...]) - no_node_ps
+no_tot_ps = length([Iterators.flatten(cpu.(ps))...])
 
 ## Initial loss ##
 test_consts, test_batch = get_test(dataOb)

@@ -20,6 +20,7 @@ function get_loss(ms, batch, p=def_worker)
     batch = gpu(batch)
     ms = gpu(ms)
     model = gen_mod(ms)
+    CuArrays.reclaim() #
     up = model(batch[1])
     lossM = lossMSE(up, batch[2])
     lossN = lossNorm(up, batch[2])
@@ -55,13 +56,13 @@ end
   model = gen_mod(ms)
   ps = gen_ps(ms)
   l(u0,u) = loss(model(u0),u)*(1+λ)
-  lval = l(data...)/(1+λ)
+  lossM = lossMSE(model(data[1]), data[2])
   gs = gradient(ps) do
     l(data...)
   end
   flush(stderr)
   out = Dict(cpu(p)=>cpu(gs[p]) for p in ps)
-  return lval, out
+  return lossM, out
 end
 
 # Parallel backprop

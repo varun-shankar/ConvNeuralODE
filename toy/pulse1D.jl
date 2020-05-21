@@ -1,10 +1,12 @@
 using DifferentialEquations
 using Flux
 using DiffEqFlux
-using Plots
-using NPZ
-using BSON: @save
-using BSON: @load
+using BSON
+
+using CuArrays
+using CUDAnative
+CuArrays.allowscalar(false)
+CUDAnative.device!(1)
 
 ################################################################################
 ### Functions ###
@@ -43,8 +45,8 @@ delt = t[2]-t[1]
 
 ################################################################################
 ### Calculate analytical and FD ###
-phi_anal = convert(Array{Float32,2},phi_a(x,tmat,u,Γ))
-phi0 = phi_anal[:,1]
+phi_anal = convert(Array{Float32,2},phi_a(x,tmat,u,Γ)) |> gpu
+phi0 = phi_anal[:,1] |> gpu
 
 #=
 # Alternate phi0
@@ -67,68 +69,15 @@ weights_opt = [-u./(2 .*delx), Γ./(delx.^2)]
 ################################################################################
 ### Define architecture ###
 
-#=
-## U Net
-function blockU(k, p, s, i, o, a)
-  if a
-    return Conv((k,), i=>o, pad=p, stride=s, relu)
-  else
-    return Conv((k,), i=>o, pad=p, stride=s)
-  end
-end
-function blockUT(k, p, s, i, o, a)
-  if a
-    return ConvTranspose((k,), i=>o, pad=p, stride=s, relu)
-  else
-    return ConvTranspose((k,), i=>o, pad=p, stride=s)
-  end
-end
-
-l1d(a) = blockU(4,1,2,1,2,a)
-l2d(a) = Chain(l1d(true),blockU(2,0,2,2,4,a))
-l3d(a) = Chain(l2d(true),blockU(2,0,2,4,8,a))
-l4d(a) = Chain(l3d(true),blockU(2,0,2,8,16,a))
-l5d(a) = Chain(l4d(true),blockU(2,0,2,16,32,a))
-l4u(a) = Chain(x -> cat(l4d(false)(x),
-                        Chain(l5d(true),blockUT(2,0,2,32,16,a))(x),dims=2))
-l3u(a) = Chain(x -> cat(l3d(false)(x),
-                        Chain(l4u(true),blockUT(2,0,2,32,8,a))(x),dims=2))
-l2u(a) = Chain(x -> cat(l2d(false)(x),
-                        Chain(l3u(true),blockUT(2,0,2,16,4,a))(x),dims=2))
-l1u(a) = Chain(x -> cat(l1d(false)(x),
-                        Chain(l2u(true),blockUT(2,0,2,8,2,a))(x),dims=2))
-l0u(a) = Chain(x -> cat(x,
-                        Chain(l1u(true),blockUT(4,1,2,4,1,a))(x),dims=2))
-output = Chain(l0u(true), blockU(3,1,1,2,1,false))
-
-
-Unet = Chain(Conv((4,), 1=>2, pad=1, stride=2, relu),
-             Conv((4,), 2=>4, pad=1, stride=2, relu),
-             Conv((2,), 4=>8, pad=0, stride=2, relu),
-             Conv((2,), 8=>16, pad=0, stride=2, relu),
-             Conv((2,), 16=>32, pad=0, stride=2, relu),
-             Conv((2,), 32=>64, pad=0, stride=2, relu),
-             Conv((2,), 64=>128, pad=0, stride=2, relu),
-             x -> reshape(x,numpts,1,1))
-
-
-dudt = Chain(x -> reshape(x,numpts,1,1),
-             l0u(true),
-             Conv((1,), 2=>1, pad=0, stride=1, relu),
-             x -> reshape(x,numpts))
-=#
-
-
 ## Deep
 dudt = Chain(x -> reshape(x,numpts,1,1),
              Conv((3,), 1=>2, pad=1, stride=1),
              Conv((3,), 2=>4, pad=1, stride=1),
              Conv((1,), 4=>2, pad=0, stride=1),
              Conv((1,), 2=>1, pad=0, stride=1),
-             x -> reshape(x,numpts))
-@load "weights-deep-checkpoint.bson" weights
-Flux.loadparams!(dudt, weights)
-#cur_pred_deep = Flux.data(predict_n_ode())
+             x -> reshape(x,numpts)) |> gpu
+# weights = BSON.load("params.bson")[:params]
+# Flux.loadparams!(dudt, weights)
 
 #=
 ## FD Informed
@@ -149,26 +98,23 @@ cur_pred = Flux.data(predict_n_ode())
 
 ################################################################################
 ### NODE Setup ###
-n_ode(x) = neural_ode(dudt,x,tspan,Tsit5(),saveat=t,reltol=1e-7,abstol=1e-9)
+n_ode = NeuralODE(dudt,tspan,Tsit5(),saveat=t,reltol=1e-7,abstol=1e-9)
 
-function predict_n_ode()
-  n_ode(phi0)
-end
-loss_n_ode() = sum(abs,phi_anal .- predict_n_ode())
+loss() = sum(abs,phi_anal .- n_ode(phi0))
 
 ### Training ###
-data = Iterators.repeated((), 20000)
+data = Iterators.repeated((), 10)
 opt = ADAM(0.001)
 
 cb = function () #callback function to observe training
-  display(loss_n_ode())
-  weights = Tracker.data.(Flux.params(dudt))
+  display(loss())
+  weights = cpu.(params(dudt))
   println(weights)
   println(" ")
   flush(stdout)
-  @save "weights-deep-checkpoint.bson" weights
-  cur_pred = Flux.data(predict_n_ode())
-  npzwrite("cur_pred_deep.npz",cur_pred)
+  bson("params.bson", params=weights)
+  up = cpu(n_ode(phi0))
+  write("upred", up[:])
   #=
   display(plot(x,cur_pred[:,[1,10,25,40,datasize]],
                ylims=(-.5,1.5),layout=(5,1),legend=false,size=(1000,2000)))
@@ -181,7 +127,7 @@ println("Training...")
 println(" ")
 
 ps = Flux.params(dudt)
-Flux.train!(loss_n_ode, ps, data, opt, cb = cb)
+Flux.train!(loss, ps, data, opt, cb = cb)
 
 ################################################################################
 ### Plotting ###
