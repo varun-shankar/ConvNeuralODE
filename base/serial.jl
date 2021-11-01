@@ -17,10 +17,19 @@ function get_loss(ms, batch)
     ms = gpu(ms)
   end
   model = gen_mod(ms)
+  testmode!(model)
   up = model(batch[1])
   lossM = lossMSE(up, batch[2])
   lossN = lossNorm(up, batch[2])
   return cpu(up), lossM, lossN
+end
+
+# Standard
+function get_div(u)
+  if gpu_num==1
+    u = gpu(u)
+  end
+  mean(div3D(t2b(u))[2:end-1,2:end-1,2:end-1,:,:])
 end
 
 # Initialize
@@ -31,6 +40,7 @@ function initialize_gpus(ms, batch)
     CuArrays.reclaim()
   end
   model = gen_mod(ms)
+  testmode!(model)
   up = model(batch[1])
   if gpu_num==1
     CuArrays.reclaim()
@@ -54,10 +64,10 @@ function train_b(w, DL, batch_idx, ms, loss, λ)
   model = gen_mod(ms)
   pss = gen_ps(ms)
   l(u0,u) = loss(model(u0),u)*(1+λ)
-  lval = l(data...)/(1+λ)
+  lossM = lossMSE(model(data[1]), data[2])
   gs = gradient(pss) do
     l(data...)
   end
   gs = Dict(cpu(p)=>cpu(gs[p]) for p in pss)
-  return lval, ps, gs
+  return lossM, ps, gs
 end

@@ -4,7 +4,7 @@ using Statistics
 ################################################################################
 
 mutable struct DataLoader
-  train_size::Int
+  train_size
   test_size::Int
   tsize::Int
   mbs::Int
@@ -18,7 +18,7 @@ mutable struct DataLoader
   stepsτ::Int
 
   function DataLoader(train_size_, test_size_, minibatch_size_, tsize_,
-                      dir_=data_dir, shuff_=true)
+                      dir_=data_dir, stepsτ_=100, shuff_=true)
 
     dir = dir_
     train_size = train_size_
@@ -27,7 +27,7 @@ mutable struct DataLoader
     tsize = tsize_
     shuff = shuff_
     channels = 3
-    stepsτ = 100
+    stepsτ = stepsτ_
 
     temp = readdlm(dir*"/global",comments=true,comment_char='/')
     globDict = Dict(temp[i,1]=>temp[i,2] for i in 1:size(temp,1))
@@ -36,8 +36,18 @@ mutable struct DataLoader
     data_idxs = Array(data_idxs[1:end-1])
 
     # File lists
-    train_idxs = data_idxs[1:train_size]
-    test_idxs = reverse(data_idxs)[1:test_size]
+    if isa(train_size, Int)
+      train_idxs = data_idxs[1:train_size]
+    else
+      train_idxs = data_idxs[train_size]
+      train_size = length(train_size)
+    end
+    if isa(test_size, Int)
+      test_idxs = reverse(data_idxs)[1:test_size]
+    else
+      test_idxs = data_idxs[test_size]
+      test_size = length(test_size)
+    end
 
     #batching
     train_idxs = [train_idxs[(i-1)*mbs+1:i*mbs] for i in 1:Int(train_size/mbs)]
@@ -54,12 +64,13 @@ function readbin(filename, T)
 end
 
 # Get training batch
-function get_train(DL::DataLoader, idx, norm=true)
+function get_train(DL::DataLoader, idx, bs=nothing, norm=true)
+  if bs == nothing; bs = 1:DL.mbs; end
   u_train_batch = Float32.(zeros(
                   DL.globDict["nx"],DL.globDict["ny"],DL.globDict["nz"],
-                  DL.channels,DL.tsize,DL.mbs))
-  for b = 1:DL.mbs
-    ts = range(DL.train_idxs[idx][b],length=DL.tsize,step=DL.globDict["dtStat"]*DL.stepsτ÷DL.tsize)
+                  DL.channels,DL.tsize,length(bs)))
+  for b = 1:length(bs)
+    ts = range(DL.train_idxs[idx][bs[b]],length=DL.tsize,step=DL.globDict["dtStat"]*DL.stepsτ÷DL.tsize)
     for t = 1:length(ts)
       for v = 1:3
         snap = readbin(DL.dir*"/data_single/u"*string(v)*"."*string(ts[t]), Float32)
@@ -73,7 +84,7 @@ function get_train(DL::DataLoader, idx, norm=true)
   if norm
     return normalize((u0_train_batch, u_train_batch))
   else
-    return ones(DL.mbs), (u0_train_batch, u_train_batch)
+    return ones(length(bs)), (u0_train_batch, u_train_batch)
   end
 end
 
@@ -102,10 +113,10 @@ function get_test(DL::DataLoader, norm=true)
 end
 
 function reshuffle!(DL::DataLoader, test=false)
-  DL.train_idxs = DL.data_idxs[1:DL.train_size]
+  DL.train_idxs = collect(Iterators.flatten(DL.train_idxs))
   shuffle!(DL.train_idxs)
   if test
-    DL.test_idxs = reverse(DL.data_idxs)[1:DL.test_size]
+    DL.test_idxs = collect(Iterators.flatten(DL.test_idxs))
     shuffle!(DL.test_idxs)
   end
   #batching
